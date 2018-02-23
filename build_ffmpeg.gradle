@@ -1,0 +1,495 @@
+
+Build._variants.eachWithIndex { String s, int i ->
+
+    String dn = s + '_debug'
+    Task debug = task dn
+
+    debug.doFirst {
+        new Build(i, Build.TYPE_DEBUG, project).join()
+    }
+
+    String rn = s + '_release'
+    Task release = task rn
+
+    release.doFirst {
+        new Build(i, Build.TYPE_RELEASE, project).join()
+    }
+}
+
+task all_release {
+    doFirst {
+        Build.exec_all(Build.TYPE_RELEASE, project)
+    }
+}
+
+task all_debug {
+    doFirst {
+        Build.exec_all(Build.TYPE_DEBUG, project)
+    }
+}
+
+task all {
+    doFirst {
+        Build.exec_all(Build.TYPE_DEBUG | Build.TYPE_RELEASE, project)
+    }
+}
+
+class Build extends Thread
+{
+    static final V_ARM_V7 = 0
+    static final V_ARM_v8 = 1
+    static final V_X86 = 2
+    static final V_X86_64 = 3
+
+    static String[] _variants = ['armv7', 'armv8', 'x86', 'x86_64']
+
+    static final int TOOLCHAIN_CNT = 4
+    static Object[] _toolchain_locks
+    static File _toolchains_dir
+    static final File[] _toolchains = new File[TOOLCHAIN_CNT]
+
+    static final FFMPEG_VERSION = '3.4.2'
+    File _build_root
+    File _ffmpeg_dir
+
+
+    final int _variant
+
+    static int _cpu_cnt = Runtime.runtime.availableProcessors()
+    static File _ndk
+    static File _ffmpeg_archive
+
+    static String[] _modified_files = [
+        'libavutil/log.c',
+        'libavutil/internal.h'
+    ]
+
+    final Project _p
+
+    static TYPE_DEBUG = 1
+    static TYPE_RELEASE = 1 << 1
+
+    final int _type
+
+    static {
+
+        String android_home = System.env['ANDROID_HOME']
+        _ndk = new File(android_home, 'ndk-bundle')
+        assert _ndk.directory
+
+        Object[] locks = new Object[TOOLCHAIN_CNT]
+
+        for (int i = 0; i < TOOLCHAIN_CNT; ++i) {
+            locks[i] = new Object()
+        }
+
+        _toolchain_locks = locks
+
+        String toolchain_path = System.env['ANDROID_NDK_TOOLCHAINS']
+
+        if (toolchain_path == null) {
+            throw new Error('ANDROID_NDK_TOOLCHAINS env variable must refer to path for standalone toolchains')
+        }
+
+        _toolchains_dir = new File(toolchain_path)
+
+        assert _toolchains_dir.directory || _toolchains_dir.mkdirs()
+
+        File archive = new File('ffmpeg-' + FFMPEG_VERSION + '.tar.xz')
+        ffmpeg_download(archive)
+
+        File dist_sig = new File(archive.path + '.asc')
+        ffmpeg_download(dist_sig)
+
+        ProcessBuilder pb = new ProcessBuilder(
+                ['gpg', '--verify', '--quiet', dist_sig.absolutePath]
+        )
+        .redirectError(new File('/dev/null'))
+
+        proc_exec(pb)
+
+        println 'Verified ' + archive + ' signature'
+
+        _ffmpeg_archive = archive
+    }
+
+    static void proc_exec(List<String> args) {
+        String[] arr = (String[]) args.toArray()
+        proc_exec(new ProcessBuilder(arr))
+    }
+
+    static void proc_exec(ProcessBuilder pb) {
+        assert pb.start().waitFor() == 0
+    }
+
+    static void exec_all(int types, Project project) {
+
+        List<Thread> threads = []
+
+        _variants.eachWithIndex { String s, int i ->
+
+            if ((types & TYPE_DEBUG) != 0) {
+                threads += new Build(i, TYPE_DEBUG, project)
+            }
+
+            if ((types & TYPE_RELEASE) != 0) {
+                threads += new Build(i, TYPE_RELEASE, project)
+            }
+        }
+
+        threads.each {
+            it.join()
+        }
+    }
+
+    Build(int variant, int type, Project p) {
+
+        _variant = variant
+        _type = type
+        _p = p
+        assert (variant >= V_ARM_V7) && (variant <= V_X86_64)
+        start()
+    }
+
+    void run() {
+
+        File dir = new File('/tmp/ffmpeg_builds/' +
+                System.currentTimeMillis().toString() + '_' +
+                _variants[_variant] + '_' +
+                ((_type == TYPE_DEBUG)? 'debug' : 'release')
+        )
+
+        assert dir.mkdirs()
+        _build_root = dir
+
+        prepare_ffmpeg()
+
+        try {
+            setup_standalone_toolchain()
+            exec_l1(dir)
+        }
+        finally {
+//            assert dir.deleteDir()
+        }
+    }
+
+    void setup_standalone_toolchain() {
+
+        synchronized (_toolchain_locks[_variant]) {
+
+            File toolchain_dir = _toolchains[_variant]
+
+            if (toolchain_dir != null) {
+                return
+            }
+
+            String arch = null
+
+            switch (_variant) {
+                case V_ARM_V7:
+                    arch = 'arm'
+                    break
+
+                case V_ARM_v8:
+                    arch = 'arm64'
+                    break
+
+                case V_X86:
+                    arch = 'x86'
+                    break
+
+                case V_X86_64:
+                    arch = 'x86_64'
+                    break
+            }
+
+            int api = (_variant == V_ARM_v8 || _variant == V_X86_64)? 21 : 16
+
+            String toolchain_name = arch + '_api_' + api
+
+            toolchain_dir = new File(_toolchains_dir, toolchain_name)
+
+            _toolchains[_variant] = toolchain_dir
+
+            if (toolchain_dir.directory) {
+                return
+            }
+
+            proc_exec( [_ndk.path + '/build/tools/make_standalone_toolchain.py',
+                        '--arch', arch,
+                        '--api', api.toString(),
+                        '--install-dir', toolchain_dir]
+            )
+        }
+    }
+
+    void exec_l1(File build_dir) {
+
+        int var = _variant
+
+        String arch
+        String triple
+        String abi
+
+//        String cpu
+
+        List<String> dis_flags = []
+
+        switch (var) {
+
+            case V_ARM_V7:
+
+                arch = 'arm'
+                abi = 'armeabi-v7a'
+                triple = 'arm-linux-androideabi'
+
+                dis_flags = ['armv5te', 'armv6', 'armv6t2']
+
+                break
+
+            case V_ARM_v8:
+                arch = 'arm64'
+                abi = 'arm64-v8a'
+                triple = 'aarch64-linux-android'
+
+                break
+
+            case V_X86:
+                arch = 'x86'
+                abi = 'x86'
+                triple = 'i686-linux-android'
+
+                dis_flags = ['amd3dnow', 'avx', 'avx2', 'aesni']
+
+                break
+
+            default:
+                arch = 'x86_64'
+                abi = 'x86_64'
+                triple = 'x86_64-linux-android'
+
+                break
+        }
+
+        dis_flags += [
+                'autodetect',
+
+                'debug',
+                'doc',
+
+                'programs',
+                'avdevice',
+                'avfilter',
+                'swscale',
+
+                'postproc',
+                'network',
+
+                'dwt',
+                'pixelutils',
+
+                'everything'
+        ]
+
+//        Map<String, String> env = System.getenv()
+
+        String toolchain_path = _toolchains[var].absolutePath
+
+        String cross_prefix = toolchain_path + '/bin/' + triple + '-'
+        String sysroot = toolchain_path + '/sysroot'
+
+
+        def cmd = [
+                _ffmpeg_dir.absolutePath + '/configure',
+                '--prefix=' + build_dir,
+                // outputs
+
+                '--libdir=' + new File('jni/prebuilt/'
+                        + (_type == TYPE_RELEASE? 'release' : 'debug')
+                        + '/'
+                        + abi).absolutePath,
+                '--incdir=' + new File('jni/include').absolutePath,
+                '--pkgconfigdir=' + build_dir,
+
+                '--cross-prefix=' + cross_prefix,
+                '--sysroot=' + sysroot,
+
+                '--cc=' + cross_prefix + 'clang',
+                '--as=' + cross_prefix + 'gcc',
+
+                '--target-os=android',
+                '--arch=' + arch,
+                '--enable-zlib'
+        ]
+
+//        if (var == V_ARM_V7) {
+//            cmd += '--enable-thumb'
+//        }
+
+        if (_type == TYPE_RELEASE) {
+            cmd +='--enable-lto'
+        }
+
+        dis_flags.each {
+            cmd += '--disable-' + it
+        }
+
+        def demuxers = [
+            'amr',
+
+            // wma containers
+            'asf', 'asf_o',
+
+            'flac', 'ogg',
+
+            'mov', 'caf', 'aac',
+
+            'mp3', 'mpegts',
+
+            'matroska',
+        ]
+
+        demuxers.each {
+            cmd += '--enable-demuxer=' + it
+        }
+
+
+        def decoders = [
+                'aac', 'aac_latm', 'alac',
+
+                'amrnb', 'amrwb',
+
+                'flac',
+
+                'mp1',
+                'mp2',
+                'mp3', 'mp3float',
+
+                'opus',
+
+                'vorbis',
+
+                'wmav1', 'wmav2', 'wmavoice', 'wmapro', 'wmalossless'
+        ]
+
+        decoders.each {
+            cmd += '--enable-decoder=' + it
+        }
+
+        def parsers = [ 'aac', 'aac_latm',
+                'flac',
+                'mpegaudio',
+                'opus',
+                'vorbis'
+        ]
+
+        parsers.each {
+            cmd += '--enable-parser=' + it
+        }
+
+        def bsfs = [
+                'aac_adtstoasc',
+                'remove_extradata',
+                'chomp',
+                'mp3_header_decompress',
+                'dump_extradata',
+                'extract_extradata',
+                'null'
+        ]
+
+        bsfs.each {
+            cmd += '--enable-bsf=' + it
+        }
+
+        // not used directly, but alters behavior of mov.c demuxer
+        cmd += '--enable-protocol=file'
+
+        def cflags = [
+                '-fvisibility=hidden',
+                '-Wno-deprecated-declarations',
+                '-Wno-unused-function',
+                '-Wno-unused-variable'
+        ]
+
+        cflags.each {
+            cmd += '--extra-cflags=' + it
+        }
+
+        if (var == V_ARM_V7) {
+
+            ['-march=armv7-a', '-Wl,--fix-cortex-a8'].each {
+                cmd += '--extra-ldflags=' + it
+            }
+        }
+
+//        println cmd
+
+        new File(build_dir, 'configure_stdout').withOutputStream { os ->
+
+            _p.exec {
+                commandLine cmd
+                workingDir _ffmpeg_dir
+                standardOutput os
+            }
+        }
+
+        new File(build_dir, 'make_install_stdout').withOutputStream { os1 ->
+        new File(build_dir, 'make_install_stderr').withOutputStream { os2 ->
+
+            _p.exec {
+                commandLine 'make', '-j' + _cpu_cnt, 'install'
+                workingDir _ffmpeg_dir
+                standardOutput os1
+                errorOutput os2
+            }
+
+        }}
+    }
+
+    static void ffmpeg_download(File f) {
+
+        if (! f.file) {
+
+            print 'Downloading ' + f
+
+            new URL('https://www.ffmpeg.org/releases/' + f.name).withInputStream { is ->
+
+                f.withOutputStream { os ->
+                    os << is
+                }
+            }
+
+            println ' DONE'
+        }
+    }
+
+    void prepare_ffmpeg()
+    {
+        _p.exec {
+            commandLine 'tar', '--extract', '--xz',
+                    '--file=' +  _ffmpeg_archive.absolutePath,
+                    '--directory=' + _build_root.absolutePath
+        }
+
+        _ffmpeg_dir = new File(_build_root, 'ffmpeg-' + FFMPEG_VERSION)
+
+        assert _ffmpeg_dir.directory
+
+        if (_type == TYPE_RELEASE) {
+
+            _modified_files.each {
+
+                File f = new File(_ffmpeg_dir, it)
+                assert f.file
+
+                File patch = new File('ffmpeg_patches_for_release_build', it + '.patch')
+                assert patch.file
+
+                _p.exec {
+                    commandLine 'patch', '--silent', '--input', patch, f
+//                    standardOutput os
+                }
+            }
+        }
+    }
+}
