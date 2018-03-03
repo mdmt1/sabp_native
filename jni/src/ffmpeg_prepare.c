@@ -48,7 +48,7 @@ i64 seek_fn(void *s_r, i64 off, int whence)
 
 #define IO_BUF_LEN 4096
 
-void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms, AVCodec **out_dec)
+void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms)
 {
     u8 *buf = av_malloc(IO_BUF_LEN);
 
@@ -80,7 +80,6 @@ void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms, AVCodec **out_dec)
 
     fmt_ctx->flags |= AVFMT_FLAG_FAST_SEEK;
 
-
     fmt_ctx->pb = io_ctx;
 
     int ret = avformat_open_input(&fmt_ctx, uri, NULL, NULL);
@@ -101,7 +100,7 @@ void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms, AVCodec **out_dec)
     AVStream *stream;
 
     {
-        ret = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, out_dec, 0);
+        ret = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, NULL, 0);
 
         if (ret < 0) {
             log_ffmpeg_err("av_find_best_stream", ret);
@@ -109,15 +108,6 @@ void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms, AVCodec **out_dec)
         }
 
         int stream_idx = ret;
-
-        // out_dec is NULL when called from get_file_info, non-NULL when called from prepare
-        if (
-            (out_dec != NULL)
-            &&
-            (*out_dec == NULL))
-        {
-            return;
-        }
 
         stream = fmt_ctx->streams[stream_idx];
 
@@ -160,15 +150,22 @@ void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms, AVCodec **out_dec)
 void prepare_l1(Session *sess, char *uri,
                 u32 *out_dur_ms, bool *out_success)
 {
-    AVCodec *dec = NULL;
-
-    prepare_l2(sess, uri, out_dur_ms, &dec);
+    prepare_l2(sess, uri, out_dur_ms);
 
     if (*out_dur_ms == 0) {
         return;
     }
 
-    AVCodecContext *dec_ctx = avcodec_alloc_context3(dec);
+    enum AVCodecID codec_id = sess->stream->codecpar->codec_id;
+
+    AVCodec *dec = avcodec_find_decoder(codec_id);
+
+    if (dec == NULL) {
+        log_d("decoder not found");
+        return;
+    }
+
+    AVCodecContext *dec_ctx = avcodec_alloc_context3(NULL);
 
     if (dec_ctx == NULL) {
         return;
@@ -183,7 +180,7 @@ void prepare_l1(Session *sess, char *uri,
         return;
     }
 
-    ret = avcodec_open2(dec_ctx, NULL, NULL);
+    ret = avcodec_open2(dec_ctx, dec, NULL);
 
     if (ret != 0) {
         log_ffmpeg_err("avcodec_open2", ret);

@@ -72,7 +72,7 @@ void ffmpeg_log_callback(void *avcl, int level, const char *fmt, va_list vl)
 //        return;
 //    }
 //
-    if (level > AV_LOG_FATAL) {
+    if (level > AV_LOG_INFO) {
         return;
     }
 

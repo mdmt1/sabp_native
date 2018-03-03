@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ffmpeg_sess.c"
+#include "ffmpeg_sess.h"
 
 typedef enum {
     READ_FRAME_RES_SUCCESS,
@@ -17,9 +18,18 @@ typedef enum {
 
 Res_read_frame read_frame(Session *s)
 {
-    int ret = av_read_frame(s->fmt_ctx, s->packet);
+    int ret;
+
+    m_read_frame_again:
+    ret = av_read_frame(s->fmt_ctx, s->packet);
 
     if (ret == 0) {
+
+        if (s->packet->stream_index != s->stream->index) {
+            av_packet_unref(s->packet);
+            goto m_read_frame_again;
+        }
+
         return READ_FRAME_RES_SUCCESS;
     }
 
@@ -33,8 +43,6 @@ Res_read_frame read_frame(Session *s)
         if (ret != 0) {
             failed_assertion("send_eof", ret);
         }
-
-        log_d("sent flush packet");
 
         return READ_FRAME_RES_END_OF_FILE;
     }
@@ -51,7 +59,6 @@ void send_packet(Session *s)
     if (ret == 0) {
         return;
     }
-
 
     if (
         ret != AVERROR_PATCHWELCOME
@@ -86,20 +93,20 @@ Res_receive_frame receive_frame(Session *s)
     int ret = avcodec_receive_frame(s->dec_ctx, s->frame);
 
     if (ret == 0) {
-
-        if (c_dev) {
-            AVFrame *f = s->frame;
-
-            if (f->channels != s->prev_ch_cnt) {
-                s->prev_ch_cnt = (u32) f->channels;
-                log_d("change of ch_cnt %u", s->prev_ch_cnt);
-            }
-
-            if (f->sample_rate != s->prev_sample_rate) {
-                s->prev_sample_rate = (u32) f->sample_rate;
-                log_d("change of sample rate %u", s->prev_sample_rate);
-            }
-        }
+//
+//        if (c_dev) {
+//            AVFrame *f = s->frame;
+//
+//            if (f->channels != s->prev_ch_cnt) {
+//                s->prev_ch_cnt = (u32) f->channels;
+//                log_d("change of ch_cnt %u", s->prev_ch_cnt);
+//            }
+//
+//            if (f->sample_rate != s->prev_sample_rate) {
+//                s->prev_sample_rate = (u32) f->sample_rate;
+//                log_d("change of sample rate %u", s->prev_sample_rate);
+//            }
+//        }
 
         return RECEIVE_FRAME_RES_SUCCESS;
     }

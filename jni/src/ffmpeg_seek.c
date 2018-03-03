@@ -3,6 +3,11 @@
 #include "c.h"
 #include "vb.h"
 #include "ffmpeg_av_wrapper.h"
+#include "ffmpeg_sess.h"
+#include "ffmpeg_sess.c"
+#include "c.h"
+#include "vb.h"
+#include "ffmpeg_av_wrapper.h"
 
 bool ffmpeg_seek_l1(Session *s, const u32 req_pos_ms, u32 pos_ms_for_av_seek_frame, u32 call_counter)
 {
@@ -87,11 +92,7 @@ bool ffmpeg_seek_l1(Session *s, const u32 req_pos_ms, u32 pos_ms_for_av_seek_fra
 
         int in_sample_cnt = frame->nb_samples;
 
-        SwrContext *swr_ctx = get_swr_ctx(s, frame);
-
-        if (swr_ctx == NULL) {
-            return false;
-        }
+        SwrContext *swr_ctx = s->swr_ctx;
 
         int ret = swr_get_out_samples(swr_ctx, in_sample_cnt);
 
@@ -158,7 +159,6 @@ bool ffmpeg_seek_l1(Session *s, const u32 req_pos_ms, u32 pos_ms_for_av_seek_fra
                     return ffmpeg_seek_l1(s, req_pos_ms, pos_ms_for_av_seek_frame, call_counter);
                 }
 
-
                 log_d("sample perfect seek failed, sample cnt diff %llu || ms diff %u || iter_cnt %u",
                       (frame_start_in_samples - pos_in_samples),
                       ms_diff,
@@ -174,7 +174,6 @@ bool ffmpeg_seek_l1(Session *s, const u32 req_pos_ms, u32 pos_ms_for_av_seek_fra
 
                 if (frame_end_in_samples >= pos_in_samples)
                 {
-
                     log_d("sample perfect seek achieved || iter_cnt %u", iter_cnt);
 
                     u32 frame_off_in_samples = (u32) (pos_in_samples - frame_start_in_samples);

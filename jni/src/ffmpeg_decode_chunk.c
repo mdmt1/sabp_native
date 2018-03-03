@@ -48,7 +48,6 @@ bool decode_chunk_l1(Session *sess, Vb *dst, u32 min_chunk_len, u64* out_first_t
 
         AVFrame *frame = sess->frame;
 
-
         if (frame->sample_rate != sess->dec_ctx->sample_rate) {
             log_d("frame->sample_rate %u, sess->dec_ctx->sample_rate %u", frame->sample_rate, sess->dec_ctx->sample_rate);
         }
@@ -62,11 +61,7 @@ bool decode_chunk_l1(Session *sess, Vb *dst, u32 min_chunk_len, u64* out_first_t
 
         int in_sample_cnt = frame->nb_samples;
 
-        SwrContext *swr_ctx = get_swr_ctx(sess, frame);
-
-        if (swr_ctx == NULL) {
-            return false;
-        }
+        SwrContext *swr_ctx = sess->swr_ctx;
 
         int ret = swr_get_out_samples(swr_ctx, in_sample_cnt);
 

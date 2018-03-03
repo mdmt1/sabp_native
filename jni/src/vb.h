@@ -8,8 +8,8 @@ typedef struct
     u8 rptr buf;
     u32 len;
     u32 cap;
-    jlong j_buf;
     u32 flags;
+    jlong j_buf;
 } Vb;
 
 #include "vb.c"

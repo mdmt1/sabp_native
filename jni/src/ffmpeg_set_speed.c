@@ -12,9 +12,8 @@ jboolean ffmpeg_set_speed(JNI_ARGS jlong j_sess, f32 speed, jboolean pitch_compe
 
     if (pitch_compensation) {
 
-        if (s->out_sample_rate != s->native_sample_rate) {
-            free_all_swr_contexts(s);
-            s->out_sample_rate = s->native_sample_rate;
+        if (! set_out_sample_rate(s, s->native_sample_rate)) {
+            return false;
         }
 
         if (! c_full) {
@@ -45,10 +44,5 @@ jboolean ffmpeg_set_speed(JNI_ARGS jlong j_sess, f32 speed, jboolean pitch_compe
 
     u32 sample_rate = (u32) ((f64) s->native_sample_rate / (f64) speed);
 
-    if (sample_rate != s->out_sample_rate) {
-        free_all_swr_contexts(s);
-        s->out_sample_rate = sample_rate;
-    }
-
-    return true;
+    return (jboolean) set_out_sample_rate(s, sample_rate);
 }

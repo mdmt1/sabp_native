@@ -8,16 +8,6 @@
 #include "sonic.c"
 
 typedef struct {
-    SwrContext *instance;
-    u64 in_ch_layout;
-    u32 in_sample_rate;
-    // out_ch_cnt is constant
-//    u32 out_sample_rate; // modified when doing speed change via resampling
-} Swr_ctx_container;
-
-#define SWR_CACHE_CAP 4
-
-typedef struct {
 
     i32 fd;
     u64 fd_pos;
@@ -29,8 +19,7 @@ typedef struct {
     AVCodecContext *dec_ctx;
     AVFrame *frame;
 
-    Swr_ctx_container swr_cache[SWR_CACHE_CAP];
-    u8 swr_cache_len;
+    SwrContext *swr_ctx;
 
     sonicStream sonic;
 
@@ -53,14 +42,7 @@ typedef struct {
 
     bool eof;
 
-    // c_dev only start
-    u32 prev_ch_cnt;
-    u32 prev_sample_rate;
-    // c_dev only end
-
 } Session;
-
-void free_all_swr_contexts(Session *s);
 
 void free_sess_l1(Session *s, bool close_fd, bool free_self)
 {
@@ -79,15 +61,16 @@ void free_sess_l1(Session *s, bool close_fd, bool free_self)
     avformat_close_input(&s->fmt_ctx);
 
     // NULL-safe
-    avcodec_free_context(&s->dec_ctx);
+    av_packet_free(&s->packet);
 
     // NULL-safe
-    av_packet_free(&s->packet);
+    avcodec_free_context(&s->dec_ctx);
 
     // NULL-safe
     av_frame_free(&s->frame);
 
-    free_all_swr_contexts(s);
+    // NULL-safe
+    swr_free(&s->swr_ctx);
 
     if (s->sonic != NULL) {
         sonicDestroyStream(s->sonic);

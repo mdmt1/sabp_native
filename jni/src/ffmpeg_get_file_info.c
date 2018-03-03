@@ -80,7 +80,7 @@ u32 ffmpeg_get_file_info(JNI_ARGS i32 fd, u64 fd_len, jlong j_uri, jlong out, u3
 
     u32 dur_ms = 0;
 
-    prepare_l2(sess, (char *) j_uri, &dur_ms, NULL);
+    prepare_l2(sess, (char *) j_uri, &dur_ms);
 
     u32 ret;
 

@@ -58,11 +58,7 @@ bool decode_chunk_sonic_l1(Session *sess, u32 min_chunk_len, u64* out_first_ts)
 
         int in_sample_cnt = frame->nb_samples;
 
-        SwrContext *swr_ctx = get_swr_ctx(sess, frame);
-
-        if (swr_ctx == NULL) {
-            return false;
-        }
+        SwrContext *swr_ctx = sess->swr_ctx;
 
         int ret = swr_get_out_samples(swr_ctx, in_sample_cnt);
 
