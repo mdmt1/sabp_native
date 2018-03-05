@@ -31,14 +31,16 @@ typedef struct {
 
     AVIOContext *io_ctx;
 
-    u64 out_ch_layout;
-    u8 out_ch_count;
-
     u32 native_sample_rate;
     u32 out_sample_rate;
 
     Vb *leftover_samples;
     u32 leftover_samples_off;
+
+
+    u64 in_ch_layout;
+    u64 out_ch_layout;
+    u8 out_ch_count;
 
     bool eof;
 

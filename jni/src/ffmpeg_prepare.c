@@ -155,16 +155,6 @@ void prepare_l1(Session *sess, char *uri,
     if (*out_dur_ms == 0) {
         return;
     }
-
-    enum AVCodecID codec_id = sess->stream->codecpar->codec_id;
-
-    AVCodec *dec = avcodec_find_decoder(codec_id);
-
-    if (dec == NULL) {
-        log_d("decoder not found");
-        return;
-    }
-
     AVCodecContext *dec_ctx = avcodec_alloc_context3(NULL);
 
     if (dec_ctx == NULL) {
@@ -177,6 +167,15 @@ void prepare_l1(Session *sess, char *uri,
 
     if (ret < 0) {
         log_ffmpeg_err("avcodec_parameters_to_context", ret);
+        return;
+    }
+
+    enum AVCodecID codec_id = dec_ctx->codec_id;
+
+    AVCodec *dec = avcodec_find_decoder(codec_id);
+
+    if (dec == NULL) {
+        log_d("decoder not found");
         return;
     }
 
@@ -197,6 +196,8 @@ void prepare_l1(Session *sess, char *uri,
             return;
         }
     }
+
+    sess->in_ch_layout = in_ch_layout;
 
     u64 out_ch_layout;
 

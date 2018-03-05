@@ -29,7 +29,7 @@ bool set_out_sample_rate(Session *s, u32 out_sample_rate) {
         NULL,
         s->out_ch_layout, AV_SAMPLE_FMT_S16,
         out_sample_rate,
-        s->dec_ctx->channel_layout, s->dec_ctx->sample_fmt, s->dec_ctx->sample_rate,
+        s->in_ch_layout, s->dec_ctx->sample_fmt, s->dec_ctx->sample_rate,
         0, NULL
     );
 
