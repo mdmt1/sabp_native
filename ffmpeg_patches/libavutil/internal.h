@@ -1,4 +1,6 @@
-@@ -173,11 +173,7 @@
+--- /tmp/ffmpeg-4.0/libavutil/internal.h	2018-04-20 13:02:58.000000000 +0300
++++ /code/ffmpeg-4.0/libavutil/internal.h	2018-04-30 15:24:15.707943304 +0300
+@@ -180,11 +180,7 @@
   * without modification. Used to disable the definition of strings
   * (for example AVCodec long_names).
   */

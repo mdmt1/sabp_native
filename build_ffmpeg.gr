@@ -1,0 +1,540 @@
+import groovy.io.FileType
+
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+
+args.each { String arg ->
+
+    if (arg == 'all') {
+        Build.exec_all(Type.values())
+    }
+    else if (arg == 'all_debug') {
+        Build.exec_all(Type.debug)
+    }
+    else if (arg == 'all_release') {
+        Build.exec_all(Type.release)
+    }
+    else {
+
+        boolean found = false
+
+        for (Variant v : Variant.values()) {
+
+            String n = v.human_str()
+
+            if (arg.startsWith(n)) {
+
+                String mode = arg.substring(n.length() + 1)
+
+                Type t = Type.valueOf(mode)
+
+                new Build(v, t)
+
+                found = true
+            }
+        }
+
+        if (! found) {
+            throw new Error('Invalid argument ' + arg)
+        }
+    }
+}
+
+Build._executor_service.shutdown()
+Build._executor_service.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS)
+System.exit(0)
+
+enum Variant {
+    ARM_V7,
+    X86,
+    ARM_V8,
+    X86_64
+
+    String human_str() {
+
+        switch (this) {
+            case ARM_V7: return 'armv7'
+            case X86: return 'x86'
+            case ARM_V8: return 'armv8'
+            case X86_64: return 'x86_64'
+        }
+    }
+
+    String abi_str()
+    {
+        switch (this)
+        {
+            case ARM_V7: return 'armeabi-v7a'
+            case X86: return 'x86'
+            case ARM_V8: return 'arm64-v8a'
+            case X86_64: return 'x86_64'
+        }
+    }
+
+    String arch() {
+
+        switch (this) {
+            case ARM_V7: return 'arm'
+            case X86: return 'x86'
+            case ARM_V8: return 'arm64'
+            case X86_64: return 'x86_64'
+        }
+    }
+
+    String triple() {
+
+        switch (this) {
+            case ARM_V7: return 'arm-linux-androideabi'
+            case X86: return 'i686-linux-android'
+            case ARM_V8: return 'aarch64-linux-android'
+            case X86_64: return 'x86_64-linux-android'
+        }
+    }
+
+    int sdk_int() {
+
+        return (this == ARM_V8 || this == X86_64)? 21 : 16
+    }
+
+    String cc() {
+
+        switch (this) {
+            case ARM_V7:
+                return "armv7a-linux-androideabi${sdk_int()}-clang"
+            default:
+                return "${triple()}${sdk_int()}-clang"
+        }
+    }
+
+    List<String> dis_flags() {
+
+        switch (this) {
+
+            case ARM_V7:
+                return [ 'armv5te', 'armv6', 'armv6t2', 'vfp' ]
+
+            case X86:
+                return ['amd3dnow', 'avx', 'avx2', 'aesni']
+                // , 'sse4', 'sse42'] some x86-only devices support these
+
+            case ARM_V8:
+                return []
+
+            case X86_64:
+                return ['amd3dnow', 'avx', 'avx2', 'aesni']
+        }
+    }
+
+}
+
+enum Type {
+    debug,
+    release
+
+    boolean dbg() {
+        return this == debug
+    }
+}
+
+//@CompileStatic
+class Build implements Runnable
+{
+    static File _toolchain_dir
+    static File _sysroot_dir
+
+    static final String FFMPEG_VERSION = '4.1.1'
+
+    static final int _cpu_cnt = Runtime.runtime.availableProcessors()
+    static File _ndk
+    static File _ffmpeg_archive
+
+    static boolean _init_done
+
+    static final ExecutorService _executor_service = Executors.newFixedThreadPool(_cpu_cnt)
+
+    File _build_root
+    File _ffmpeg_dir
+
+    final Variant _variant
+    final Type _type
+
+    void init() {
+
+        synchronized (Build.class) {
+
+            if (_init_done) {
+                return
+            }
+
+            String android_home = System.getenv()['ANDROID_HOME']
+            _ndk = new File(android_home, 'ndk-bundle')
+            assert _ndk.directory
+
+            _toolchain_dir = new File(_ndk, 'toolchains/llvm/prebuilt/linux-x86_64')
+            assert _toolchain_dir.directory
+
+            _sysroot_dir = new File(_toolchain_dir, 'sysroot')
+            assert _sysroot_dir.directory
+
+            File archive = new File('ffmpeg-' + FFMPEG_VERSION + '.tar.xz')
+            ffmpeg_download(archive)
+
+            File dist_sig = new File(archive.path + '.asc')
+            ffmpeg_download(dist_sig)
+
+            proc_exec(['gpg', '--verify', '--quiet', dist_sig])
+
+            println 'Verified ' + archive + ' signature'
+
+            _ffmpeg_archive = archive
+
+            _init_done = true
+        }
+    }
+
+    static void exec_all(Type... types) {
+
+        Variant.values().each { Variant v ->
+
+            if (types.contains(Type.debug)) {
+                new Build(v, Type.debug)
+            }
+
+            if (types.contains(Type.release)) {
+                new Build(v, Type.release)
+            }
+        }
+    }
+
+    Build(Variant v, Type t) {
+
+        _variant = v
+        _type = t
+
+        _executor_service.execute(this)
+    }
+
+    private static final AtomicInteger _atomic_int = new AtomicInteger(1)
+
+    void run() {
+
+        Thread.currentThread().name = "${_variant.human_str()}_${_type.name()}"
+
+        File dir = new File("/tmp/ffmpeg_builds/" +
+                "${System.currentTimeMillis()}_${_atomic_int.getAndIncrement()}_" +
+                "${_variant.human_str()}_${_type.name()}"
+        )
+
+        _build_root = dir
+
+        _exec_out = new File(_build_root, 'exec_out')
+        assert _exec_out.mkdirs()
+
+        init()
+
+        prepare_ffmpeg()
+
+        build(dir)
+    }
+
+    void build(File build_dir) {
+
+        def v = _variant
+
+        List<String> dis_flags = v.dis_flags()
+
+        dis_flags += [
+                'autodetect',
+
+                'debug',
+                'doc',
+
+                'programs',
+                'avdevice',
+                'avfilter',
+                'swscale',
+
+                'postproc',
+                'network',
+
+                'dwt',
+                'pixelutils',
+
+                'everything'
+        ]
+
+        String toolchain_path = _toolchain_dir.absolutePath
+
+        String cross_prefix = "${toolchain_path}/bin/${v.triple()}-"
+
+        def cmd = [
+                _ffmpeg_dir.absolutePath + '/configure',
+                '--prefix=' + build_dir,
+                // outputs
+
+                '--libdir=' + new File("jni/prebuilt/${_type.name()}/${v.abi_str()}")
+                        .absolutePath,
+                '--incdir=' + new File('jni/include').absolutePath,
+                '--pkgconfigdir=' + build_dir,
+
+                '--cross-prefix=' + cross_prefix,
+                '--sysroot=' + _sysroot_dir,
+
+                "--cc=${toolchain_path}/bin/${v.cc()}",
+//                '--as=' + cross_prefix + 'gcc',
+
+                '--extra-ldflags=-fuse-ld=lld',
+
+                '--target-os=android',
+                '--arch=' + v.arch(),
+                '--enable-zlib'
+        ]
+
+        if (v == Variant.ARM_V7) {
+            // significantly smaller binary size, same (or slightly better in some cases) perf
+            cmd << '--enable-thumb'
+        }
+
+        if (_type == Type.release) {
+            cmd << '--enable-lto'
+        }
+
+        dis_flags.each {
+            cmd << "--disable-${it}"
+        }
+
+        def demuxers = [
+            'amr', 'amrnb', 'amrwb',
+            'ac3',
+
+            // wma container
+            'asf', // 'asf_o',
+
+            'flac', 'ogg',
+
+            'mov', 'caf', 'aac',
+
+            'mp3', 'mpegts',
+
+            'matroska',
+            'wav'
+        ]
+
+        demuxers.each {
+            cmd << "--enable-demuxer=${it}"
+        }
+
+        def decoders = [
+                'aac', 'aac_latm', 'alac',
+
+                'amrnb', 'amrwb',
+
+                'flac',
+                'opus',
+                'vorbis',
+
+                'wmav1', 'wmav2', // 'wmavoice', 'wmapro', 'wmalossless'
+
+                'pcm_s16be', 'pcm_s16be_planar', 'pcm_s16le', 'pcm_s16le_planar',
+//                'pcm_s8',
+//                'pcm_s8_planar',
+//                'pcm_s24be',
+//                'pcm_s24daud',
+//                'pcm_s24le',
+//                'pcm_s24le_planar',
+//                'pcm_s32be',
+//                'pcm_s32le',
+//                'pcm_s32le_planar',
+//                'pcm_s64be',
+//                'pcm_s64le',
+        ]
+
+        if (v == Variant.ARM_V7) {
+            // fixed point decoder is significantly (~2x) faster on Krait 200
+            decoders << 'mp3'
+        }
+        else {
+            // < 5% slower on Cortex-A53 in Snapdragon 410,
+            // likely faster on Cortex-A55 and big (>= A57) cores
+            // ~1.65x faster on x86, ~4.2x faster on x86_64 on Atom Z8500
+            decoders << 'mp3float'
+        }
+
+        decoders.each {
+            cmd << "--enable-decoder=${it}"
+        }
+
+        def parsers = [ 'aac', 'aac_latm',
+                'flac',
+                'mpegaudio',
+                'opus',
+                'vorbis'
+        ]
+
+        parsers.each {
+            cmd << "--enable-parser=${it}"
+        }
+
+        def bsfs = [
+                'aac_adtstoasc',
+                'remove_extradata',
+                'chomp',
+                'mp3_header_decompress',
+                'extract_extradata',
+                'null'
+        ]
+
+        bsfs.each {
+            cmd << "--enable-bsf=${it}"
+        }
+
+//        def filters = [
+//                'equalizer', 'volume'
+//        ]
+//
+//        filters.each {
+//            cmd += "--enable-filter=${it}"
+//        }
+
+        def cflags = [
+                '-fvisibility=hidden',
+                '-Wno-deprecated-declarations',
+                '-Wno-unused-function',
+                '-Wno-unused-variable'
+        ]
+
+        if (_type.dbg()) {
+            cflags += '-DFFMPEG_ENABLE_LOGGING'
+        }
+
+        if (v == Variant.ARM_V7) {
+            cflags.addAll(['-mfloat-abi=softfp', '-mfpu=neon'])
+        }
+
+        cflags.each {
+            cmd << '--extra-cflags=' + it
+        }
+
+//        if (v == Variant.ARM_V7) {
+//
+//            ['-march=armv7-a', '-Wl,--fix-cortex-a8'].each {
+//                cmd << '--extra-ldflags=' + it
+//            }
+//        }
+
+
+        println 'configure ' + _build_root
+        def pb_conf = new ProcessBuilder(cmd)
+        pb_conf.directory(_ffmpeg_dir)
+        proc_exec(pb_conf)
+
+        def pb_make = new ProcessBuilder(['make', "-j${_cpu_cnt + 1}", 'install'])
+        pb_make.directory(_ffmpeg_dir)
+
+        synchronized (Build.class) {
+            println 'make ' + _build_root
+            proc_exec(pb_make)
+        }
+
+        println 'finished ' + _build_root
+    }
+
+    static void ffmpeg_download(File f) {
+
+        if (! f.file) {
+
+            print 'Downloading ' + f
+
+            new URL('https://www.ffmpeg.org/releases/' + f.name).withInputStream { is ->
+
+                f.withOutputStream { os ->
+                    os << is
+                }
+            }
+
+            println ' DONE'
+        }
+    }
+
+    void prepare_ffmpeg() {
+
+        proc_exec(['tar', '--extract', '--xz',
+                    '--file=' +  _ffmpeg_archive,
+                    '--directory=' + _build_root])
+
+        _ffmpeg_dir = new File(_build_root, 'ffmpeg-' + FFMPEG_VERSION)
+
+        assert _ffmpeg_dir.directory
+
+        File patches_dir = new File('ffmpeg_patches')
+
+        patches_dir.eachFileRecurse (FileType.FILES, {
+
+            File f = new File(_ffmpeg_dir, it.path.substring(patches_dir.path.length() + 1))
+            assert f.file
+
+            proc_exec(['patch', '--input', it, f])
+        })
+
+        println 'patched ' + _build_root
+    }
+
+    void proc_exec(List argv) {
+        ProcessBuilder b = new ProcessBuilder(argv)
+        proc_exec(b)
+    }
+
+    File _exec_out
+    int _proc_exec_cntr
+
+    void proc_exec(ProcessBuilder b) {
+
+        def argv = b.command()
+
+        argv.eachWithIndex { Object entry, int i ->
+
+            if (entry instanceof File) {
+                argv[i] = entry.absolutePath
+            }
+            else {
+                argv[i] = entry.toString()
+            }
+        }
+
+        ++ _proc_exec_cntr
+
+        String prefix = _proc_exec_cntr.toString() + '_'
+
+        new File(_exec_out, prefix + 'cmd').withWriter { w ->
+
+            argv.each {
+                w.write(it)
+                w.write('\n')
+            }
+        }
+
+        File stdout = new File(_exec_out, prefix + 'stdout')
+
+        File stderr = new File(_exec_out, prefix + 'stderr')
+
+        b.redirectOutput(
+                ProcessBuilder.Redirect.appendTo(stdout)
+        )
+
+        b.redirectError(
+                ProcessBuilder.Redirect.appendTo(stderr)
+        )
+
+        assert b.start().waitFor() == 0
+
+        if (stdout.length() == 0) {
+            stdout.delete()
+        }
+
+        if (stderr.length() == 0) {
+            stderr.delete()
+        }
+    }
+}
