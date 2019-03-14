@@ -9,7 +9,7 @@
 #include "android/log.h"
 
 
-#ifdef NDEBUG
+#ifdef SABP_RELEASE
 
 const bool c_dev = false;
 #define log_d(...)
@@ -68,13 +68,13 @@ void log_ffmpeg_err_l1(const char *fn_name, int err, const char *parent_fn_name)
 void ffmpeg_log_callback(void *avcl, int level, const char *fmt, va_list vl)
 {
 
-//    if (level == AV_LOG_TRACE) {
-//        return;
-//    }
-//
-    if (level > AV_LOG_INFO) {
+    if (level == AV_LOG_TRACE) {
         return;
     }
+
+//    if (level > AV_LOG_INFO) {
+//        return;
+//    }
 
     const char *av_class_name;
 

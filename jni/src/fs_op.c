@@ -21,10 +21,10 @@ const u32 OPEN_MODE_DIR = 1;
 
 const u32 OFF_MODE = 0;
 const u32 OFF_SIZE = 4;
+//const u32 OFF_INODE = 12;
 //const u32 OFF_DEV = 12;
-//const u32 OFF_INO = 20;
 
-#define JAVA_STAT_SIZE 12
+#define JAVA_STAT_SIZE 20
 
 bool stat_l1(int stat_ret, struct stat *ss, jlong j_out)
 {
@@ -38,6 +38,9 @@ bool stat_l1(int stat_ret, struct stat *ss, jlong j_out)
 
     u64 size = (u64) ss->st_size;
     u8_arr_set_u64(out + OFF_SIZE, size);
+
+//    u64 inode = ss->st_ino;
+//    u8_arr_set_u64(out + OFF_INODE, inode);
 
     return true;
 }

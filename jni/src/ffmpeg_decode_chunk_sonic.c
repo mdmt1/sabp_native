@@ -49,11 +49,21 @@ bool decode_chunk_sonic_l1(Session *sess, u32 min_chunk_len, u64* out_first_ts)
 
         AVFrame *frame = sess->frame;
 
-        sess->pos_ts = (u64) frame->best_effort_timestamp;
+        {
+            i64 t = frame->best_effort_timestamp;
 
-        if (out_first_ts != NULL) {
-            *out_first_ts = sess->pos_ts;
-            out_first_ts = NULL;
+            if (t >= 0) {
+
+                sess->pos_ts = (u64) t;
+
+                if (out_first_ts != NULL) {
+                    *out_first_ts = sess->pos_ts;
+                    out_first_ts = NULL;
+                }
+            }
+            else {
+                log_d("negative frame->best_effort_timestamp %lld", t);
+            }
         }
 
         int in_sample_cnt = frame->nb_samples;

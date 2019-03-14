@@ -93,6 +93,11 @@ Res_receive_frame receive_frame(Session *s)
     int ret = avcodec_receive_frame(s->dec_ctx, s->frame);
 
     if (ret == 0) {
+
+        if (s->frame->channels != s->in_ch_count) {
+            log_d("s->frame->channels (%u) != s->in_ch_count(%u)", (u32) s->frame->channels, (u32) s->in_ch_count);
+            return RECEIVE_FRAME_RES_BENIGN_ERROR;
+        }
 //
 //        if (c_dev) {
 //            AVFrame *f = s->frame;

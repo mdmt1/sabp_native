@@ -40,6 +40,7 @@ typedef struct {
 
     u64 in_ch_layout;
     u64 out_ch_layout;
+    u8 in_ch_count;
     u8 out_ch_count;
 
     bool eof;

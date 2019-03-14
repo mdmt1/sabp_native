@@ -40,15 +40,18 @@ i64 seek_fn(void *s_r, i64 off, int whence)
     }
 
     assert(whence == SEEK_SET);
-    assert((u64) off <= s->fd_len);
+
+    if ((u64) off > s->fd_len) {
+        return -1;
+    }
 
     s->fd_pos = (u64) off;
     return 0;
 }
 
-#define IO_BUF_LEN 4096
+#define IO_BUF_LEN (4 * 1024)
 
-void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms)
+void prepare_l2(Session *sess, u32 *out_dur_ms)
 {
     u8 *buf = av_malloc(IO_BUF_LEN);
 
@@ -57,7 +60,7 @@ void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms)
     }
 
     AVIOContext *io_ctx = avio_alloc_context(buf, IO_BUF_LEN,
-        /* forbid writing */ 0, sess,
+        0 /* forbid writing */, sess,
         read_fn, NULL /* no write fn */,
         seek_fn
     );
@@ -78,11 +81,9 @@ void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms)
 //    will be freed by ffmpeg if avformat_open_input fails
 //    sess->fmt_ctx = fmt_ctx;
 
-    fmt_ctx->flags |= AVFMT_FLAG_FAST_SEEK;
-
     fmt_ctx->pb = io_ctx;
 
-    int ret = avformat_open_input(&fmt_ctx, uri, NULL, NULL);
+    int ret = avformat_open_input(&fmt_ctx, NULL, NULL, NULL);
 
     if (ret != 0) {
         log_ffmpeg_err("avformat_open_input", ret);
@@ -147,10 +148,10 @@ void prepare_l2(Session *sess, char *uri, u32 *out_dur_ms)
     }
 }
 
-void prepare_l1(Session *sess, char *uri,
+void prepare_l1(Session *sess,
                 u32 *out_dur_ms, bool *out_success)
 {
-    prepare_l2(sess, uri, out_dur_ms);
+    prepare_l2(sess, out_dur_ms);
 
     if (*out_dur_ms == 0) {
         return;
@@ -172,7 +173,9 @@ void prepare_l1(Session *sess, char *uri,
 
     enum AVCodecID codec_id = dec_ctx->codec_id;
 
-    AVCodec *dec = avcodec_find_decoder(codec_id);
+    AVCodec *dec;
+
+    dec = avcodec_find_decoder(codec_id);
 
     if (dec == NULL) {
         log_d("decoder not found");
@@ -186,11 +189,19 @@ void prepare_l1(Session *sess, char *uri,
         return;
     }
 
+    i32 in_ch_count = dec_ctx->channels;
+
+    if (in_ch_count < 1 || in_ch_count > U8_MAX) {
+        return;
+    }
+
+    sess->in_ch_count = (u8) in_ch_count;
+
     u64 in_ch_layout = dec_ctx->channel_layout;
 
     if (in_ch_layout == 0) {
 
-        in_ch_layout = (u64) av_get_default_channel_layout(dec_ctx->channels);
+        in_ch_layout = (u64) av_get_default_channel_layout(in_ch_count);
 
         if (in_ch_layout == 0) {
             return;
@@ -234,7 +245,7 @@ void prepare_l1(Session *sess, char *uri,
 #define PREPARE_OUT_SIZE 9
 
 u32 ffmpeg_prepare(JNI_ARGS
-                   i32 fd, u64 fd_len, jlong j_uri,
+                   i32 fd, u64 fd_len,
                    u32 native_sample_rate,
                    jlong j_out)
 {
@@ -246,13 +257,11 @@ u32 ffmpeg_prepare(JNI_ARGS
 
     sess->native_sample_rate = native_sample_rate;
 
-    char *uri = (char *) j_uri;
-
     u32 dur_ms = 0;
 
     bool success = false;
 
-    prepare_l1(sess, uri, &dur_ms, &success);
+    prepare_l1(sess, &dur_ms, &success);
 
     if (! success) {
         free_sess_l1(sess, true, true);

@@ -52,11 +52,21 @@ bool decode_chunk_l1(Session *sess, Vb *dst, u32 min_chunk_len, u64* out_first_t
             log_d("frame->sample_rate %u, sess->dec_ctx->sample_rate %u", frame->sample_rate, sess->dec_ctx->sample_rate);
         }
 
-        sess->pos_ts = (u64) frame->best_effort_timestamp;
+        {
+            i64 t = frame->best_effort_timestamp;
 
-        if (out_first_ts != NULL) {
-            *out_first_ts = sess->pos_ts;
-            out_first_ts = NULL;
+            if (t >= 0) {
+
+                sess->pos_ts = (u64) t;
+
+                if (out_first_ts != NULL) {
+                    *out_first_ts = sess->pos_ts;
+                    out_first_ts = NULL;
+                }
+            }
+            else {
+                log_d("negative frame->best_effort_timestamp %lld", t);
+            }
         }
 
         int in_sample_cnt = frame->nb_samples;

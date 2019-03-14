@@ -71,7 +71,7 @@ u32 get_file_info_l1(Session *s, u32 dur_ms, jlong out, u32 out_cap) {
 
 const u32 GET_FILE_INFO_FLAG_ONLY_DUR_MS = 1;
 
-u32 ffmpeg_get_file_info(JNI_ARGS i32 fd, u64 fd_len, jlong j_uri, jlong out, u32 out_cap, u32 flags)
+u32 ffmpeg_get_file_info(JNI_ARGS i32 fd, u64 fd_len, jlong out, u32 out_cap, u32 flags)
 {
     Session sess_ = { 0 };
     Session *sess = &sess_;
@@ -80,7 +80,7 @@ u32 ffmpeg_get_file_info(JNI_ARGS i32 fd, u64 fd_len, jlong j_uri, jlong out, u3
 
     u32 dur_ms = 0;
 
-    prepare_l2(sess, (char *) j_uri, &dur_ms);
+    prepare_l2(sess, &dur_ms);
 
     u32 ret;
 

@@ -6,14 +6,8 @@
 
 void ffmpeg_init()
 {
-    av_register_all();
-
     if (c_dev) {
         av_log_set_callback(ffmpeg_log_callback);
-
-//        log_d("cpu flags: %x", av_get_cpu_flags());
-//        log_d("neon support: %i", (av_get_cpu_flags() & AV_CPU_FLAG_NEON) != 0);
-
     }
 }
 
